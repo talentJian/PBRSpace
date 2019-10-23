@@ -1,6 +1,6 @@
 #include "UnityCG.cginc"
 #include "UnityLightingCommon.cginc"
-
+#include "UnityLight.cginc"
     struct PBSData{
         float metallic;
         float perceptualRoughness;
@@ -19,7 +19,7 @@
         l.dir = _WorldSpaceLightPos0.xyz;
         return l;
     }
-    float4 PBSLighting(SurfaceData s,PBSData pbsData,UnityLight)
+    float4 PBSLighting(SurfaceData s,PBSData pbsData,UnityLight light)
     {
         
     }
