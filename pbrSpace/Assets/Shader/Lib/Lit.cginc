@@ -24,6 +24,9 @@ UnityLight MainLight ()
     UnityLight l;
 
     l.color = _LightColor0.rgb;
+#if UNITY_COLORSPACE_GAMMA
+    l.color = pow(l.color,2.2);
+#endif
     l.dir = _WorldSpaceLightPos0.xyz;
     return l;
 }
@@ -68,7 +71,22 @@ float GeometrySmith(float3 normal,float NdotV,float NdotL,float k)
     return ggx1 * ggx2;
 }
 
+// normal should be normalized, w=1.0
+// output in active color space
+half3 MShadeSH9 (half4 normal)
+{
+    // Linear + constant polynomial terms
+    half3 res = SHEvalLinearL0L1 (normal);
 
+    // Quadratic polynomials
+    res += SHEvalLinearL2 (normal);
+
+// #   ifdef UNITY_COLORSPACE_GAMMA
+//         res = LinearToGammaSpace (res);
+// #   endif
+
+    return res;
+}
 // DFG/ 4(NDOTL)*(NDOTV)
 
 float3 PBSLighting(SurfaceData s,UnityLight light)
@@ -94,12 +112,12 @@ float3 PBSLighting(SurfaceData s,UnityLight light)
     
     float3 diffuseTerm = kd * s.albedo.rgb ; //这里按照Unity的不除以PI
     float3 specularTerm = (NDF * G * fresnelTerm) / max(4 * (NDOTL * NDOTV),0.001) ;
-    float3 BRDF = (diffuseTerm + specularTerm) * NDOTL; //灯光的衰减在外面乘。。
+    float3 BRDF = (diffuseTerm + specularTerm) * NDOTL * light.color; //灯光的衰减在外面乘。。
 
 
      float3 sh = 0;
     //#if UNITY_SHOULD_SAMPLE_SH
-        sh= ShadeSH9(float4(s.normal,1)) * s.albedo; //indirect Light
+        sh= MShadeSH9(float4(s.normal,1)) * s.albedo; //indirect Light
     //#endif
     //IBL部分
 
@@ -112,12 +130,19 @@ float3 PBSLighting(SurfaceData s,UnityLight light)
     //
     half surfaceReduction;
     surfaceReduction = 1.0 / (s.roughness*s.roughness + 1.0);           // fade \in [0.5;1]
+
+    //surfaceReduction = pow(surfaceReduction,1/2.2);
     float fresnelStrength = saturate(1-s.perceptualRoughness + s.reflectivity);
     float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
-    IBLColor *= surfaceReduction * lerp(s.specular,fresnelStrength,fresnel);
+    // surfaceReduction = 1.0-0.28*s.roughness*s.perceptualRoughness;  
+    float3 envBRDF = surfaceReduction * lerp(s.specular,fresnelStrength,fresnel);
+    #ifdef UNITY_COLORSPACE_GAMMA
+        IBLColor = pow(IBLColor,2.2);
+    #endif
+    IBLColor *=  envBRDF;
 
     
-    return  BRDF + IBLColor + sh;
+    return  BRDF  + IBLColor +sh;
 }
 
 // //----Unity的IBL部分
