@@ -6,7 +6,7 @@ Shader "ZShader/PBR/Lit"
         _MainTex ("Texture", 2D) = "white" {}
         _Smoothness("Smoothness",Range(0,1)) = 0.5
         _Metallic("Metallic",Range(0,1)) = 0.5
-
+        _Color("_Color",Color) = (1,1,1,1)
     }
     SubShader
     {
@@ -42,7 +42,7 @@ Shader "ZShader/PBR/Lit"
 
             float _Smoothness;
             float _Metallic;
-
+            float4 _Color;
             v2f vert (appdata v)
             {
                 v2f o;
@@ -56,7 +56,7 @@ Shader "ZShader/PBR/Lit"
 
             fixed4 frag (v2f i) : SV_Target
             {
-                float4 albedo = tex2D(_MainTex,i.uv);
+                float4 albedo = tex2D(_MainTex,i.uv) * _Color;
                 SurfaceData s;
                 s.normal =  normalize(i.worldNormal);
                 s.viewDir = normalize(UnityWorldSpaceViewDir(i.worldPos));
@@ -64,11 +64,16 @@ Shader "ZShader/PBR/Lit"
 
                 s.metallic = _Metallic;
                 s.perceptualRoughness = 1- _Smoothness;
-                s.roughness = s.perceptualRoughness * s.perceptualRoughness;
-
+                s.roughness = clamp(s.perceptualRoughness * s.perceptualRoughness,0.001,1);
+                s.reflectivity = lerp(0.04,1.0,_Metallic);
+                s.specular = lerp(0.04,s.albedo.rgb,s.metallic); //FO
                 UnityLight mainLight = MainLight();
                 
                 float3 pbsLight = PBSLighting(s,mainLight) * mainLight.color;
+
+               
+                
+                
 
                 float4 color = float4(pbsLight,1);
                 // color = pow(color,1/2.2);

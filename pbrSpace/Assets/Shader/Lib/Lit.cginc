@@ -2,6 +2,7 @@
 #include "UnityCG.cginc"
 #include "UnityLightingCommon.cginc"
 #include "UnityGlobalIllumination.cginc"
+//#include "UnityImageBasedLighting.cginc"
 struct PBSData{
     
 };
@@ -14,8 +15,9 @@ struct SurfaceData
     float perceptualRoughness;
     float roughness;
 
+    float reflectivity;
     float fresnelStrength;
-    float specular; //这个应该理解为F0
+    float3 specular; //这个应该理解为F0
 };
 UnityLight MainLight ()
 {
@@ -26,6 +28,12 @@ UnityLight MainLight ()
     return l;
 }
 
+//已经定义了
+// half3 FresnelLerp(half3 F0, half3 F90, half cosA)
+// {
+//     half t = Pow5 (1 - cosA);   // ala Schlick interpoliation
+//     return lerp (F0, F90, t);
+// }
 
 float3 FresnelSchilick(float HDOTV,float3 F0)
 {
@@ -47,7 +55,7 @@ float GeometrySchlickGGX(float NdotV,float k)
 {
     float denom = NdotV * (1-k)+k;
     
-    return NdotV / denom;
+    return NdotV / denom ;
 }
 
 //合并 viewDir 和 lightDir的 G
@@ -69,35 +77,84 @@ float3 PBSLighting(SurfaceData s,UnityLight light)
     float HDOTV = saturate(dot(halfDir,s.viewDir));
     float NDOTL = saturate(dot(s.normal,light.dir));
     float NDOTV = saturate(dot(s.normal,s.viewDir));
-    
+    float LDOTH = saturate(dot(light.dir,halfDir));
+
     float NDF = DistributionGGX(s.normal,halfDir,s.roughness);
-    // float k = (pbsData.roughness + 1) * (pbsData.roughness + 1) /8;
-    float G = GeometrySmith(s.normal,NDOTV,NDOTL,s.perceptualRoughness);
+    float k = (s.perceptualRoughness + 1) * (s.perceptualRoughness + 1) /8;
+    float G = GeometrySmith(s.normal,NDOTV,NDOTL,k);
     
     
-    float3 F0 = lerp(0.04,s.albedo.rgb,s.metallic);
+   
     
-    float3 fresnelTerm = FresnelSchilick(HDOTV,F0);
+    float3 fresnelTerm = FresnelSchilick(HDOTV,s.specular);
 
     float3 ks = fresnelTerm;
     float3 kd = 1-ks;
     kd *= 1 - s.metallic;
     
-    float3 diffuseTerm = kd * s.albedo.rgb /UNITY_PI;
+    float3 diffuseTerm = kd * s.albedo.rgb ; //这里按照Unity的不除以PI
     float3 specularTerm = (NDF * G * fresnelTerm) / max(4 * (NDOTL * NDOTV),0.001) ;
     float3 BRDF = (diffuseTerm + specularTerm) * NDOTL; //灯光的衰减在外面乘。。
-    return BRDF;
+
+
+     float3 sh = 0;
+    //#if UNITY_SHOULD_SAMPLE_SH
+        sh= ShadeSH9(float4(s.normal,1)) * s.albedo; //indirect Light
+    //#endif
+    //IBL部分
+
+    //采样ibl 
+    float3 reflectVector = reflect(-s.viewDir,s.normal);
+    float mip = perceptualRoughnessToMipmapLevel(s.perceptualRoughness);
+    half4 rgbm = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, reflectVector, mip);
+    float3 IBLColor = DecodeHDR(rgbm, unity_SpecCube0_HDR);
+
+    //
+    half surfaceReduction;
+    surfaceReduction = 1.0 / (s.roughness*s.roughness + 1.0);           // fade \in [0.5;1]
+    float fresnelStrength = saturate(1-s.perceptualRoughness + s.reflectivity);
+    float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
+    IBLColor *= surfaceReduction * lerp(s.specular,fresnelStrength,fresnel);
+
+    
+    return  BRDF + IBLColor + sh;
 }
 
-//----Unity的IBL部分
-float3 ReflectEnvironment(SurfaceData s,float3 environment)
-{
-    // if(s.perfectDiffuser)
-    // {
-    //     return 0;
-    // }
-    float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
-    environment *= lerp(s.specular,s.fresnelStrength,fresnel); // 如果是 perfectDiffuse, 这里会是全黑
-    environment /= s.roughness * s.roughness + 1.0;  //这样可以减弱了 rouhness 的不同范围在 envirmont * [0.5,1]
-    return environment;
-}
+// //----Unity的IBL部分
+// float3 ReflectEnvironment(SurfaceData s,float3 environment)
+// {
+//     // if(s.perfectDiffuser)
+//     // {
+//     //     return 0;
+//     // }
+//     float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
+    
+//     environment *= lerp(s.specular,fresnelStrength,fresnel); // 如果是 perfectDiffuse, 这里会是全黑
+//     environment /= s.roughness * s.roughness + 1.0;  //这样可以减弱了 rouhness 的不同范围在 envirmont * [0.5,1]
+//     return environment;
+// }
+
+
+
+// ///GI 函数，采样LightMap
+// float3 GlobalIllumination(VertexOutput input,LitSurface surface){
+//     #if defined(LIGHTMAP_ON)
+//         float3 gi = SampleLightmap(input.lightmapUV);
+//         #if defined(_SUBTRACTIVE_LIGHTING)
+//             gi = SubtractiveLighting(surface,gi);
+//         #endif
+//         #if defined(DYNAMICLIGHTMAP_ON)
+//             gi +=  SampleDynamicLightmap(input.dynamicLightmapUV);
+//         #endif
+//         return gi;
+//     #elif defined(DYNAMICLIGHTMAP_ON)
+//         return SampleDynamicLightmap(input.dynamicLightmapUV);
+//     #else
+//         return SampleLightProbes(surface);
+//     #endif
+// }
+
+// //采样LightProbe
+// float3 SampleLightProbes (LitSurface s) {
+	
+// }
