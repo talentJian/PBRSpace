@@ -87,6 +87,32 @@ half3 MShadeSH9 (half4 normal)
 
     return res;
 }
+
+
+//----Unity的IBL部分
+float3 ReflectEnvironment(SurfaceData s)
+{
+    // if(s.perfectDiffuser)
+    // {
+    //     return 0;
+    // }
+
+    //采样ibl 
+    float3 reflectVector = reflect(-s.viewDir,s.normal);
+    float mip = perceptualRoughnessToMipmapLevel(s.perceptualRoughness);
+    half4 rgbm = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, reflectVector, mip);
+    float3 environment = DecodeHDR(rgbm, unity_SpecCube0_HDR);
+    #ifdef UNITY_COLORSPACE_GAMMA
+        environment = pow(environment,2.2);
+    #endif
+
+    float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
+    float fresnelStrength = saturate(1-s.perceptualRoughness + s.reflectivity);
+    environment *= lerp(s.specular,fresnelStrength,fresnel); // 如果是 perfectDiffuse, 这里会是全黑
+    environment /= s.roughness * s.roughness + 1.0;  //这样可以减弱了 rouhness 的不同范围在 envirmont * [0.5,1]
+    return environment;
+}
+
 // DFG/ 4(NDOTL)*(NDOTV)
 
 float3 PBSLighting(SurfaceData s,UnityLight light)
@@ -112,74 +138,19 @@ float3 PBSLighting(SurfaceData s,UnityLight light)
     
     float3 diffuseTerm = kd * s.albedo.rgb ; //这里按照Unity的不除以PI
     float3 specularTerm = (NDF * G * fresnelTerm) / max(4 * (NDOTL * NDOTV),0.001) ;
-    float3 BRDF = (diffuseTerm + specularTerm) * NDOTL * light.color; //灯光的衰减在外面乘。。
+    float3 BRDF = (diffuseTerm + specularTerm) * NDOTL * light.color; //TODO: 灯光的衰减 
 
 
-     float3 sh = 0;
+    float3 sh = 0;
     //#if UNITY_SHOULD_SAMPLE_SH
-        sh= MShadeSH9(float4(s.normal,1)) * s.albedo; //indirect Light
+        sh= MShadeSH9(float4(s.normal,1)) * kd * s.albedo.rgb; //indirect diffuse Light,可以使用envMap,Unity这里使用的就是SH
     //#endif
     //IBL部分
 
-    //采样ibl 
-    float3 reflectVector = reflect(-s.viewDir,s.normal);
-    float mip = perceptualRoughnessToMipmapLevel(s.perceptualRoughness);
-    half4 rgbm = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, reflectVector, mip);
-    float3 IBLColor = DecodeHDR(rgbm, unity_SpecCube0_HDR);
+    float3 IBLColor = ReflectEnvironment(s); //indirect specular
 
-    //
-    half surfaceReduction;
-    surfaceReduction = 1.0 / (s.roughness*s.roughness + 1.0);           // fade \in [0.5;1]
-
-    //surfaceReduction = pow(surfaceReduction,1/2.2);
-    float fresnelStrength = saturate(1-s.perceptualRoughness + s.reflectivity);
-    float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
-    // surfaceReduction = 1.0-0.28*s.roughness*s.perceptualRoughness;  
-    float3 envBRDF = surfaceReduction * lerp(s.specular,fresnelStrength,fresnel);
-    #ifdef UNITY_COLORSPACE_GAMMA
-        IBLColor = pow(IBLColor,2.2);
-    #endif
-    IBLColor *=  envBRDF;
-
-    
     return  BRDF  + IBLColor +sh;
 }
 
-// //----Unity的IBL部分
-// float3 ReflectEnvironment(SurfaceData s,float3 environment)
-// {
-//     // if(s.perfectDiffuser)
-//     // {
-//     //     return 0;
-//     // }
-//     float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
-    
-//     environment *= lerp(s.specular,fresnelStrength,fresnel); // 如果是 perfectDiffuse, 这里会是全黑
-//     environment /= s.roughness * s.roughness + 1.0;  //这样可以减弱了 rouhness 的不同范围在 envirmont * [0.5,1]
-//     return environment;
-// }
 
 
-
-// ///GI 函数，采样LightMap
-// float3 GlobalIllumination(VertexOutput input,LitSurface surface){
-//     #if defined(LIGHTMAP_ON)
-//         float3 gi = SampleLightmap(input.lightmapUV);
-//         #if defined(_SUBTRACTIVE_LIGHTING)
-//             gi = SubtractiveLighting(surface,gi);
-//         #endif
-//         #if defined(DYNAMICLIGHTMAP_ON)
-//             gi +=  SampleDynamicLightmap(input.dynamicLightmapUV);
-//         #endif
-//         return gi;
-//     #elif defined(DYNAMICLIGHTMAP_ON)
-//         return SampleDynamicLightmap(input.dynamicLightmapUV);
-//     #else
-//         return SampleLightProbes(surface);
-//     #endif
-// }
-
-// //采样LightProbe
-// float3 SampleLightProbes (LitSurface s) {
-	
-// }
