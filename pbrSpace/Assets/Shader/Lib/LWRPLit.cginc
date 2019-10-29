@@ -20,6 +20,8 @@ struct SurfaceData
     float fresnelStrength;
     float3 specular; //这个应该理解为F0
     float3 diffuse; //这里一般放着 albedo * kd 
+
+    float alpha;
 };
 UnityLight MainLight ()
 {
@@ -34,7 +36,7 @@ UnityLight MainLight ()
 }
 
 SurfaceData GetLitSurface(float3 normal,float3 position,float3 viewDir,
-float3 color,float metallic,float smoothness,bool perfectDiffuser = false)
+float3 color,float metallic,float smoothness,half alpha,bool perfectDiffuser = false)
 {
     SurfaceData s;
     s.normal = normal;
@@ -56,6 +58,11 @@ float3 color,float metallic,float smoothness,bool perfectDiffuser = false)
     s.perceptualRoughness = 1.0 - smoothness;
     // s.roughness = s.perceptualRoughness *s.perceptualRoughness;
     s.roughness = clamp(s.perceptualRoughness * s.perceptualRoughness,0.001,1);
+
+    #if _ALPHAPREMULTIPLY_ON
+    s.diffuse *= alpha;
+    s.alpha = alpha * (1-s.reflectivity) + s.reflectivity;
+    #endif
     return s;
 }
 
@@ -80,19 +87,12 @@ half3 MShadeSH9 (half4 normal)
 //----Unity的IBL部分
 float3 ReflectEnvironment(SurfaceData s)
 {
-    // if(s.perfectDiffuser)
-    // {
-    //     return 0;
-    // }
-
     //采样ibl 
     float3 reflectVector = reflect(-s.viewDir,s.normal);
     float mip = perceptualRoughnessToMipmapLevel(s.perceptualRoughness);
     half4 rgbm = UNITY_SAMPLE_TEXCUBE_LOD(unity_SpecCube0, reflectVector, mip);
     float3 environment = DecodeHDR(rgbm, unity_SpecCube0_HDR);
-    // #ifdef UNITY_COLORSPACE_GAMMA
-    //     environment = pow(environment,2.2);
-    // #endif
+
 
     float fresnel = Pow4(1.0 - saturate(dot(s.normal,s.viewDir)));
     float fresnelStrength = saturate(1-s.perceptualRoughness + s.reflectivity);
@@ -102,6 +102,28 @@ float3 ReflectEnvironment(SurfaceData s)
 }
 
 
+//采样GI 相关
+//实时则采样light probe
+//否则采样Lightmap,这里不考虑 substractive的阴影
+half3 SampleGI(SurfaceData s)
+{
+    half3 gi = 0;
+    #ifdef LIGHTMAP_ON
+        half4 bakedColorTex = UNITY_SAMPLE_TEX2D(unity_Lightmap, data.lightmapUV.xy);
+        half3 bakedColor = DecodeLightmap(bakedColorTex);
+        gi = bakedColor;
+    #else
+        half3 sh= MShadeSH9(float4(s.normal,1)) * s.diffuse;
+        gi = sh;
+    #endif
+    return gi;
+}
+
+// half3 SampleLightmap(float2 lightmapUV)
+// {
+//     fixed3 lmcol = DecodeLightmap(unity_Lightmap,lightmapUV);
+//     return lmcol;
+// }
 
 //LWRP使用的BRDF
 half3 LWRPPBSLighting(SurfaceData s,UnityLight light)
@@ -117,10 +139,10 @@ half3 LWRPPBSLighting(SurfaceData s,UnityLight light)
     half normalizationTerm = (s.roughness+0.5)*4;
     half specurlarTerm = (s.roughness*s.roughness) / ((d*d)*max(0.1h,LdotH2) * normalizationTerm);
 
-    half3 BRDF = ((specurlarTerm * s.specular) + s.diffuse) * NDotL * light.color;
+    half3 BRDF = ((specurlarTerm * s.specular) + s.diffuse);
 
-    half sh= MShadeSH9(float4(s.normal,1)) * s.diffuse; 
-
-    half3 IBLColor = ReflectEnvironment(s);
-    return BRDF + IBLColor + sh;
+    //放在外面加
+    // half3 sh= MShadeSH9(float4(s.normal,1)) * s.diffuse; //indirect diffuse
+    // half3 IBLColor = ReflectEnvironment(s); //indirect specular
+    return BRDF* NDotL * light.color;
 }
