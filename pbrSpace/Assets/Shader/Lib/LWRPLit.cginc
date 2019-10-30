@@ -2,10 +2,14 @@
 #include "UnityCG.cginc"
 #include "UnityLightingCommon.cginc"
 #include "UnityGlobalIllumination.cginc"
-//#include "UnityImageBasedLighting.cginc"
-struct PBSData{
-    
+
+struct LightTexData
+{
+    float metallic;
+    float smoothness;
+    float emissiveMask;
 };
+
 struct SurfaceData
 {  
     float3 position;
@@ -23,16 +27,40 @@ struct SurfaceData
 
     float alpha;
 };
+
+
 UnityLight MainLight ()
 {
     UnityLight l;
 
     l.color = _LightColor0.rgb;
-#if UNITY_COLORSPACE_GAMMA
-    l.color = pow(l.color,2.2);
-#endif
+// #if UNITY_COLORSPACE_GAMMA
+//     l.color = pow(l.color,2.2);
+// #endif
+
     l.dir = _WorldSpaceLightPos0.xyz;
     return l;
+}
+
+
+LightTexData UnPackLightTex(sampler2D lightTex,float2 uv,float _Metallic,float _Smoothness)
+{
+    LightTexData data;
+    half4 _dataChannel = tex2D(lightTex,uv);
+    #if _METALLICGLOSSMAP
+        half metallic = _dataChannel.r;
+        half smoothness = _dataChannel.a; 
+        half emissiveMask = _dataChannel.g;
+    #else
+        half metallic = _Metallic;
+        half smoothness = _Smoothness; 
+        half emissiveMask = 1;
+    #endif
+
+    data.metallic = metallic;
+    data.smoothness = smoothness;
+    data.emissiveMask = emissiveMask;
+    return data;
 }
 
 SurfaceData GetLitSurface(float3 normal,float3 position,float3 viewDir,
@@ -61,13 +89,19 @@ float3 color,float metallic,float smoothness,half alpha,bool perfectDiffuser = f
 
     #if _ALPHAPREMULTIPLY_ON
     s.diffuse *= alpha;
-    s.alpha = alpha * (1-s.reflectivity) + s.reflectivity;
+    s.alpha = lerp(alpha,1,s.reflectivity); // alpha * (1-s.reflectivity) + s.reflectivity;
+    #else
+    s.alpha = alpha;
     #endif
     return s;
 }
 
-// normal should be normalized, w=1.0
-// output in active color space
+SurfaceData GetLitSurfaceMeta (float3 color, float metallic, float smoothness) {
+	return GetLitSurface(0, 0, 0, color, metallic, smoothness,1);
+}
+
+
+//一般来来说 对L2的采样可以放在vertex 然后混合
 half3 MShadeSH9 (half4 normal)
 {
     // Linear + constant polynomial terms
@@ -75,10 +109,6 @@ half3 MShadeSH9 (half4 normal)
 
     // Quadratic polynomials
     res += SHEvalLinearL2 (normal);
-
-// #   ifdef UNITY_COLORSPACE_GAMMA
-//         res = LinearToGammaSpace (res);
-// #   endif
 
     return res;
 }
@@ -105,25 +135,20 @@ float3 ReflectEnvironment(SurfaceData s)
 //采样GI 相关
 //实时则采样light probe
 //否则采样Lightmap,这里不考虑 substractive的阴影
-half3 SampleGI(SurfaceData s)
+half3 SampleGI(SurfaceData s,float2 lightmapUV,half3 vertexLight = 0)
 {
     half3 gi = 0;
     #ifdef LIGHTMAP_ON
-        half4 bakedColorTex = UNITY_SAMPLE_TEX2D(unity_Lightmap, data.lightmapUV.xy);
+        half4 bakedColorTex = UNITY_SAMPLE_TEX2D(unity_Lightmap, lightmapUV);
         half3 bakedColor = DecodeLightmap(bakedColorTex);
         gi = bakedColor;
     #else
-        half3 sh= MShadeSH9(float4(s.normal,1)) * s.diffuse;
+        half3 sh= (MShadeSH9(float4(s.normal,1)) + vertexLight) * s.diffuse;
         gi = sh;
     #endif
     return gi;
 }
 
-// half3 SampleLightmap(float2 lightmapUV)
-// {
-//     fixed3 lmcol = DecodeLightmap(unity_Lightmap,lightmapUV);
-//     return lmcol;
-// }
 
 //LWRP使用的BRDF
 half3 LWRPPBSLighting(SurfaceData s,UnityLight light)
@@ -141,8 +166,5 @@ half3 LWRPPBSLighting(SurfaceData s,UnityLight light)
 
     half3 BRDF = ((specurlarTerm * s.specular) + s.diffuse);
 
-    //放在外面加
-    // half3 sh= MShadeSH9(float4(s.normal,1)) * s.diffuse; //indirect diffuse
-    // half3 IBLColor = ReflectEnvironment(s); //indirect specular
     return BRDF* NDotL * light.color;
 }

@@ -17,7 +17,7 @@ public class LWRPLitShaderGUI : BaseCustomShaderGUI
         Alpha,   // Old school alpha-blending mode, fresnel does not affect amount of transparency
         Premultiply, // Physically plausible transparency mode, implemented as alpha pre-multiply
         Additive,
-        Multiply
+        //Multiply
     }
 
 
@@ -28,8 +28,18 @@ public class LWRPLitShaderGUI : BaseCustomShaderGUI
     private MaterialProperty mSmoothnessProperty;
     private MaterialProperty mColorProperty;
 
+    private MaterialProperty mEmissiveProperty;
+    private MaterialProperty mEmissiveColorProperty;
+
     private MaterialProperty mSurfaceTypeProp;
     private MaterialProperty mBlendModeProp;
+
+    private MaterialProperty mClipValueProp;
+    private MaterialProperty mClipToggleProp;
+
+
+    private string[] surfaceOptions = new[] {"Opaque", "Transparent"};
+    private string[] blendOptions = new[] { "Alpha", "Premultiply","Additvie" };
     protected override void OnBaseGUI()
     {
         base.OnBaseGUI();
@@ -41,16 +51,37 @@ public class LWRPLitShaderGUI : BaseCustomShaderGUI
         mColorProperty = FindProperty("_Color");
 
 
-        //mSurfaceTypeProp = FindProperty("_Surface", properties);
-        //mBlendModeProp = FindProperty("_Blend", properties);
+        mSurfaceTypeProp = FindProperty("_Surface", properties);
+        mBlendModeProp = FindProperty("_Blend", properties);
 
-        //receiveShadowsProp = FindProperty("_ReceiveShadows", properties, false);
+        mClipToggleProp = FindProperty("_ALPHATEST_ON");
+        mClipValueProp = FindProperty("_ClipValue");
 
-        editor.TexturePropertySingleLine(new GUIContent("Albedo"), mMainTexProperty, mColorProperty);
+        mEmissiveColorProperty = FindProperty("_EmissiveColor");
+
+        EditorGUI.BeginChangeCheck();
+        {
+            
+            DoPopup("Surface Type", mSurfaceTypeProp, surfaceOptions);
+            if ((SurfaceType)target.GetFloat("_Surface") == SurfaceType.Transparent)
+                DoPopup("BlendMode", mBlendModeProp, blendOptions);
+        }
+        if (EditorGUI.EndChangeCheck())
+        {
+            SetupMaterialBlendMode(target);
+        }
+        
+        editor.ShaderProperty(mClipToggleProp, "AlphaTest开关");
+        if (mClipToggleProp.floatValue >= 1)
+        {
+            editor.ShaderProperty(mClipValueProp, "Clip");
+        }
+
+        editor.TexturePropertySingleLine(new GUIContent("固有色"), mMainTexProperty, mColorProperty);
         var hasMap = mLightTexProperty.textureValue != null;
 
         EditorGUI.BeginChangeCheck();
-        editor.TexturePropertySingleLine(new GUIContent("Metallic(R) Smooth(A)"), mLightTexProperty, hasMap ? null : mMetallicProp);
+        editor.TexturePropertySingleLine(new GUIContent("通道图", "Metallic (R) 自发光 (G) Smoothness (A)"), mLightTexProperty, hasMap ? null : mMetallicProp);
         if (EditorGUI.EndChangeCheck())
         {
             SetKeyword("_METALLICGLOSSMAP", mLightTexProperty.textureValue);
@@ -58,21 +89,55 @@ public class LWRPLitShaderGUI : BaseCustomShaderGUI
         if(!hasMap)
             editor.ShaderProperty(mSmoothnessProperty,"Smoothness",3);
 
+        //EditorGUILayout.HelpBox("Metallic (R) 自发光 (G) Smoothness (A)", MessageType.Info);
+
         editor.TexturePropertySingleLine(new GUIContent("BumpMap"), mBumpMapProperty);
+
+        DoEmissive();
     }
 
+
+    void DoEmissive()
+    {
+
+        editor.ShaderProperty( mEmissiveColorProperty, new GUIContent("自发光颜色"));
+        //控制烘焙LightMap自发光~
+        EditorGUI.BeginChangeCheck();
+        editor.LightmapEmissionProperty();
+        if (EditorGUI.EndChangeCheck())
+        {
+
+            foreach (Material m in editor.targets)
+            {
+                m.globalIlluminationFlags &=
+                    ~MaterialGlobalIlluminationFlags.EmissiveIsBlack;
+            }
+        }
+    }
+    
+    protected void DoPopup(string label, MaterialProperty property, string[] options)
+    {
+        if (property == null)
+            throw new ArgumentNullException("property");
+
+        EditorGUI.showMixedValue = property.hasMixedValue;
+
+        var mode = property.floatValue;
+        EditorGUI.BeginChangeCheck();
+        mode = EditorGUILayout.Popup(label, (int)mode, options);
+        if (EditorGUI.EndChangeCheck())
+        {
+            editor.RegisterPropertyChangeUndo(label);
+            property.floatValue = (float)mode;
+        }
+
+        EditorGUI.showMixedValue = false;
+    }
 
     void SetupMaterialBlendMode(Material material)
     {
         if (material == null)
             throw new ArgumentNullException("material");
-
-        bool alphaClip = material.GetFloat("_AlphaClip") == 1;
-        if (alphaClip)
-            material.EnableKeyword("_ALPHATEST_ON");
-        else
-            material.DisableKeyword("_ALPHATEST_ON");
-
         SurfaceType surfaceType = (SurfaceType)material.GetFloat("_Surface");
         if (surfaceType == SurfaceType.Opaque)
         {
@@ -116,15 +181,15 @@ public class LWRPLitShaderGUI : BaseCustomShaderGUI
                     material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
                     material.SetShaderPassEnabled("ShadowCaster", false);
                     break;
-                case BlendMode.Multiply:
-                    material.SetOverrideTag("RenderType", "Transparent");
-                    material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.DstColor);
-                    material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
-                    material.SetInt("_ZWrite", 0);
-                    material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-                    material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
-                    material.SetShaderPassEnabled("ShadowCaster", false);
-                    break;
+                //case BlendMode.Multiply:
+                //    material.SetOverrideTag("RenderType", "Transparent");
+                //    material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.DstColor);
+                //    material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+                //    material.SetInt("_ZWrite", 0);
+                //    material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                //    material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                //    material.SetShaderPassEnabled("ShadowCaster", false);
+                //    break;
             }
         }
     }
