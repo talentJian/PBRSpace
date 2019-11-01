@@ -1,0 +1,45 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel Multiply
+#pragma kernel FillWithRed
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+RWTexture2D<float4> Result;
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    // TODO: insert actual code here!
+
+    Result[id.xy] = float4(id.x & id.y, (id.x & 15)/15.0, (id.y & 15)/15.0, 0.0);
+}
+
+
+
+struct VecMatPair
+{
+    float3 pos;
+    float4x4 mat;
+};
+
+RWStructuredBuffer<VecMatPair> dataBuffer;
+
+[numthreads(16,1,1)]
+void Multiply(uint3 id :SV_DispatchThreadId)
+{
+    dataBuffer[id.x].pos = mul(dataBuffer[id.x].mat,float4(dataBuffer[id.x].pos,1.0));
+}
+
+
+// test.compute
+
+//ThreadId 类似坐标，左下开始 [0,0]
+RWTexture2D<float4> resRed;
+
+//标记了32个线程组，每个组8个线程
+
+[numthreads(1,1,1)] //标识一个thread 中有多少个Id 
+void FillWithRed(uint3 dtid : SV_DispatchThreadID) // thread Id从0开始 8就是 [0,7]
+{
+    resRed[dtid.xy] = float4(dtid.x /256.0,dtid.y /256.0,0,1);
+}
